@@ -128,6 +128,15 @@ Las reglas de sintaxis más comunes son:
 
 Aunque este estándar pueda parecer un anacronismo hoy en día, se adoptó hace casi 20 años para asegurar la claridad en compiladores antiguos de C y se mantiene por estricta compatibilidad con miles de proyectos existentes. Al programar, simplemente debes acostumbrar la vista e ignorar estas letras iniciales para entender el propósito de la función.
 
+#### Las constantes `pdTRUE` y `pdFALSE`
+
+En consonancia con su estilo y su diseño original en lenguaje C (que no contaba originalmente con el tipo nativo `bool`), FreeRTOS define sus propias constantes de verdad y falsedad bajo el prefijo `pd` (**Project Definitions**):
+* **`pdTRUE`**: Equivale numéricamente a `1` (Verdadero).
+* **`pdFALSE`**: Equivale numéricamente a `0` (Falso).
+
+Estas macros se utilizan como el estándar de retorno en funciones del kernel para verificar operaciones exitosas (por ejemplo, al tomar un semáforo con `xSemaphoreTake()` o recibir datos de una cola con `xQueueReceive()`).
+
+
 ## Parte 2: Programación
 
 ### FreeRTOS en Arduino (Arduino_FreeRTOS_Library)
@@ -162,6 +171,8 @@ Para escribir código en el IDE de Arduino utilizando esta biblioteca, es fundam
 * `xTaskCreate()`: Es la función principal para instanciar una nueva tarea. Asigna memoria para el TCB (*Task Control Block*) y la pila, y la añade a la lista de tareas listas para ejecutarse. Recibe parámetros como el puntero a la función, el nombre, el tamaño de la pila, los parámetros de la tarea y su prioridad.
 * `vTaskStartScheduler()`: Inicia el planificador del sistema operativo, tomando el control del microcontrolador para comenzar a ejecutar las tareas creadas. *(Nota: En la biblioteca Arduino_FreeRTOS, esta función se llama automáticamente al finalizar el `setup()`, por lo que no es necesario escribirla manualmente).* 
 * `vTaskDelete()`: Elimina una tarea del planificador. El sistema (a través de la *Idle Task*) se encargará de liberar automáticamente la memoria que el kernel le había asignado a esa tarea.
+* `taskYIELD()`: Solicita al planificador un cambio de contexto (context switch) inmediato. Si se ejecuta desde una tarea, cede la CPU a tareas de igual prioridad. Si se ejecuta al final de una rutina de interrupción (ISR) cuando una tarea de mayor prioridad ha sido despertada, obliga a la CPU a ejecutar esa tarea inmediatamente sin esperar a que transcurra el siguiente *tick* del sistema.
+
 
 **2. Retardos y Control de Tiempo (Delays)**
 
@@ -200,7 +211,104 @@ Al programar con `Arduino_FreeRTOS_Library`, existen reglas de oro que difieren 
 
 ### Evidencias luego de la implementación
 
+Para verificar el cumplimiento de los requerimientos solicitados en la práctica, se diseñó e implementó un **Sistema Inteligente de Semáforos con Cruce Peatonal** en un microcontrolador Arduino Uno R3, utilizando la biblioteca `Arduino_FreeRTOS_Library`. 
 
+El diseño se ideó con el propósito de ser probado y simulado en **SimulIDE**, organizando los componentes físicos y el código de la siguiente manera:
+
+#### 1. Conexiones y Circuito en SimulIDE
+
+* **Semáforo Vehicular:**
+  * LED Rojo: Pin 12 (en serie con resistencia de 220 $\Omega$)
+  * LED Amarillo: Pin 11 (en serie con resistencia de 220 $\Omega$)
+  * LED Verde: Pin 10 (en serie con resistencia de 220 $\Omega$)
+* **Semáforo Peatonal:**
+  * LED Rojo: Pin 9 (en serie con resistencia de 220 $\Omega$)
+  * LED Verde: Pin 8 (en serie con resistencia de 220 $\Omega$)
+* **Botón de Solicitud de Cruce:**
+  * Pin 2 (configurado en modo `INPUT_PULLUP`). Un extremo del pulsador se conecta al Pin 2 de Arduino y el otro a `GND`. Cuando es presionado, genera un flanco de bajada (FALLING) que dispara una interrupción de hardware externa (`INT0`).
+
+#### 2. Arquitectura de Software en FreeRTOS
+
+La lógica del programa se divide en dos tareas concurrentes de distintas prioridades y un mecanismo de interrupción para la entrada del usuario:
+
+1. **Tarea Controladora del Ciclo de Semáforos (`controllerTask` - Prioridad 2 / Alta):**
+   * Se encuentra inicialmente en estado **Bloqueado (Blocked)** a la espera del semáforo binario `xSemButton`.
+   * Al ser activada por el botón a través de la interrupción, despierta inmediatamente (apropiación de CPU por prioridad), imprime su estado y ejecuta secuencialmente el cambio de luces utilizando `vTaskDelay()` para no bloquear la CPU (pila de 100 palabras / 200 bytes).
+   * Cuenta con una fase de parpadeo de luz verde peatonal y un periodo de **cooldown** (enfriamiento de 4 segundos) que impide que carros se detengan indefinidamente por solicitudes peatonal repetidas.
+2. **Tarea Periódica de Monitoreo (`monitorTask` - Prioridad 1 / Baja):**
+   * Es una tarea periódica gestionada mediante la función `vTaskDelay()`.
+   * Se ejecuta de forma regular cada **3 segundos**, imprimiendo estadísticas resumidas en el puerto serie (tiempo actual en ticks, código numérico de estado del semáforo y cantidad acumulada de solicitudes atendidas) usando una pila liviana de 120 palabras (240 bytes).
+3. **Mecanismos de Sincronización:**
+   * **Semáforo Binario (`xSemButton`):** Sincroniza la ISR del botón (Pin 2) con la tarea controladora de alta prioridad, despertándola de inmediato ante la acción del peatón mediante la función `xSemaphoreGiveFromISR()`.
+
+
+#### 3. Simulación y Salida
+
+Al simular la placa y abrir la consola serie, la salida esperada ilustra la alternancia limpia de tareas y la ejecución priorizada de eventos:
+
+```text
+RTOS Ready
+Ticks: 186 | State: CAR_GREEN | Crossings: 0
+Ticks: 372 | State: CAR_GREEN | Crossings: 0
+
+Ticks: 558 | State: CAR_GREEN | Crossings: 0
+Ticks: 744 | State: CAR_GREEN | Crossings: 0
+
+[Crossing Requested]
+Ticks: 930 | State: CAR_YELLOW | Crossings: 0
+Ticks: 1116 | State: CAR_YELLOW | Crossings: 0
+Ticks: 1302 | State: PED_CROSSING | Crossings: 1
+Ticks: 1488 | State: PED_CROSSING | Crossings: 1
+Ticks: 1674 | State: PED_CROSSING | Crossings: 1
+Ticks: 1860 | State: PED_WARNING | Crossings: 1
+Ticks: 2046 | State: PED_WARNING | Crossings: 1
+Ticks: 2232 | State: PED_WARNING | Crossings: 1
+Ticks: 2418 | State: COOLDOWN | Crossings: 1
+Ticks: 2604 | State: COOLDOWN | Crossings: 1
+Ticks: 2790 | State: CAR_GREEN | Crossings: 1
+Ticks: 2976 | State: CAR_GREEN | Crossings: 1
+
+[Crossing Requested]
+Ticks: 3162 | State: CAR_YELLOW | Crossings: 1
+Ticks: 3348 | State: CAR_YELLOW | Crossings: 1
+Ticks: 3534 | State: PED_CROSSING | Crossings: 2
+Ticks: 3720 | State: PED_CROSSING | Crossings: 2
+Ticks: 3906 | State: PED_CROSSING | Crossings: 2
+```
+
+#### Análisis del comportamiento de la simulación
+
+Video de prueba: [video](/media/arduino-uno-rtos-simple.mp4)
+
+Si observamos el Monitor Serie durante la simulación, el flujo de eventos ocurre de la siguiente manera:
+
+1. **Estado de Espera (`Ticks: 186` a `744`):**
+   * Al iniciar, se imprime `"RTOS Ready"`. Los vehículos tienen luz verde.
+   * La tarea de monitoreo (`monitorTask`, prioridad 1) imprime el estado cada **3 segundos** (~186 ticks): `State: CAR_GREEN | Crossings: 0`.
+   * La tarea del controlador (`controllerTask`, prioridad 2) está bloqueada en espera de recibir la señal del botón.
+
+2. **Pulsación del Botón e Interrupción (`[Crossing Requested]`):**
+   * Al presionar el botón en la simulación, se dispara la interrupción externa (`buttonISR()`).
+   * La ISR entrega el semáforo `xSemButton` (`xSemaphoreGiveFromISR`) y llama a `taskYIELD()` para forzar un cambio de contexto inmediato a la tarea de prioridad alta (`controllerTask`).
+   * `controllerTask` se activa instantáneamente, imprime `[Crossing Requested]` e inicia la secuencia del semáforo.
+
+3. **Ciclo del Semáforo (`Ticks: 930` a `2604`):**
+   * **`CAR_YELLOW`**: Los vehículos cambian a amarillo por 4 segundos. El monitor registra este estado en los ticks 930 y 1116.
+   * **`PED_CROSSING`**: Los autos se detienen en rojo y el semáforo peatonal cambia a verde por 7 segundos. Se incrementa el contador (`Crossings: 1`).
+   * **`PED_WARNING`**: La luz verde peatonal parpadea por advertencia (ticks 1860 a 2232).
+   * **`COOLDOWN`**: El peatón vuelve a rojo, los autos recuperan el verde y el sistema entra en enfriamiento por 6 segundos para reanudar el tráfico vehicular.
+
+4. **Retorno al estado normal (`Ticks: 2790` en adelante):**
+   * Finalizado el enfriamiento, la tarea controladora vacía cualquier rebote del botón acumulado en el semáforo y regresa a `CAR_GREEN` a la espera de un nuevo cruce.
+
+--
+
+## Conclusiones
+
+* **Facilidad en la ejecución de la Máquina de Estados:** El uso de un RTOS simplifica drásticamente el diseño e implementación de una máquina de estados. En lugar de lidiar con complejas estructuras de banderas y condiciones anidadas dentro de un único bucle secuencial, cada estado y sus transiciones fluyen de manera lineal y natural dentro de su propia tarea dedicada, reduciendo errores lógicos de programación.
+* **Coordinación de tiempos sin lógica extra:** La naturaleza multitarea y no bloqueante del RTOS permite realizar tareas periódicas (como el monitoreo y diagnóstico por consola) mientras se atienden eventos asíncronos y temporizaciones extensas de forma paralela en un solo núcleo. Se elimina por completo la necesidad de añadir lógica compleja de cronometraje manual (como el uso de múltiples condiciones con `millis()`), delegando toda la gestión y reparto del tiempo de CPU de forma transparente al planificador del sistema operativo.
+
+---
 
 ## Referencias
 
