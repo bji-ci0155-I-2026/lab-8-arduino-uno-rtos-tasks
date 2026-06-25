@@ -234,10 +234,10 @@ La lógica del programa se divide en dos tareas concurrentes de distintas priori
 1. **Tarea Controladora del Ciclo de Semáforos (`controllerTask` - Prioridad 2 / Alta):**
    * Se encuentra inicialmente en estado **Bloqueado (Blocked)** a la espera del semáforo binario `xSemButton`.
    * Al ser activada por el botón a través de la interrupción, despierta inmediatamente (apropiación de CPU por prioridad), imprime su estado y ejecuta secuencialmente el cambio de luces utilizando `vTaskDelay()` para no bloquear la CPU (pila de 100 palabras / 200 bytes).
-   * Cuenta con una fase de parpadeo de luz verde peatonal y un periodo de **cooldown** (enfriamiento de 4 segundos) que impide que carros se detengan indefinidamente por solicitudes peatonal repetidas.
+   * Cuenta con una fase de parpadeo de luz verde peatonal y un periodo de **cooldown** (enfriamiento de 6 segundos) que impide que carros se detengan indefinidamente por solicitudes peatonal repetidas.
 2. **Tarea Periódica de Monitoreo (`monitorTask` - Prioridad 1 / Baja):**
    * Es una tarea periódica gestionada mediante la función `vTaskDelay()`.
-   * Se ejecuta de forma regular cada **3 segundos**, imprimiendo estadísticas resumidas en el puerto serie (tiempo actual en ticks, código numérico de estado del semáforo y cantidad acumulada de solicitudes atendidas) usando una pila liviana de 120 palabras (240 bytes).
+   * Se ejecuta de forma regular cada **3 segundos**, imprimiendo estadísticas resumidas en el puerto serie (tiempo actual en ticks, código numérico de estado del semáforo y cantidad acumulada de solicitudes atendidas) usando una pila liviana de 150 palabras (300 bytes).
 3. **Mecanismos de Sincronización:**
    * **Semáforo Binario (`xSemButton`):** Sincroniza la ISR del botón (Pin 2) con la tarea controladora de alta prioridad, despertándola de inmediato ante la acción del peatón mediante la función `xSemaphoreGiveFromISR()`.
 
